@@ -2,9 +2,6 @@ package com.emr.maxkvalues;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.IntWritable;
-import org.apache.hadoop.io.LongWritable;
-import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
@@ -15,48 +12,76 @@ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class MaxValues {
 
-    public static class Map extends Mapper<LongWritable, Text, Text, IntWritable> {
-        private final static IntWritable index = new IntWritable(1);
-        private final Text numberValue = new Text();
+    public static class Map extends Mapper<Object, Text, Text, Text> {
+        private TreeMap<Long, Integer> topNValuesMap;
 
-        public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+        @Override
+        public void setup(Context context) {
+            topNValuesMap = new TreeMap<>();
+        }
+
+        @Override
+        public void map(Object key, Text value, Context context) {
             Configuration conf = context.getConfiguration();
             int count = Integer.parseInt(conf.get("count"));
 
             List<Integer> items = Stream.of(value.toString().split(" "))
-                    .map(String::trim).map(Integer::parseInt)
-                    .sorted(Comparator.reverseOrder()).limit(count).collect(Collectors.toList());
+                    .map(String::trim).map(Integer::parseInt).collect(Collectors.toList());
             ListIterator<Integer> iterator = items.listIterator();
 
             while (iterator.hasNext()) {
-                index.set(iterator.nextIndex());
-                numberValue.set(String.valueOf(iterator.next()));
-                context.write(numberValue, index);
+                int index = iterator.nextIndex();
+                topNValuesMap.put(Long.valueOf(iterator.next()), index);
+            }
+
+            if (topNValuesMap.size() > count) {
+                topNValuesMap.remove(topNValuesMap.firstKey());
+            }
+        }
+
+        @Override
+        public void cleanup(Context context) throws IOException, InterruptedException {
+            for (java.util.Map.Entry<Long, Integer> entry : topNValuesMap.entrySet()) {
+                long number = entry.getKey();
+                int index = entry.getValue();
+                context.write(new Text(String.valueOf(number)), new Text(String.valueOf(index)));
             }
         }
     }
 
-    public static class Reduce extends Reducer<NullWritable, IntWritable, NullWritable, IntWritable> {
-        private final TreeMap<Integer, Integer> topNValuesMap = new TreeMap<>();
+    public static class Reduce extends Reducer<Text, Text, Text, Text> {
+        private TreeMap<Long, Integer> topNValuesReducerMap = new TreeMap<>();
 
-        public void reduce(NullWritable key, Iterable<IntWritable> values, Context context)
-                throws IOException, InterruptedException {
+        @Override
+        public void setup(Context context){
+            topNValuesReducerMap = new TreeMap<>();
+        }
+
+        public void reduce(Text key, Iterable<Text> values, Context context) {
 
             Configuration conf = context.getConfiguration();
             int count = Integer.parseInt(conf.get("count"));
 
-            topNValuesMap.put(Integer.valueOf(key.toString()), Integer.valueOf(key.toString()));
-            if (topNValuesMap.size() > count) {
-                topNValuesMap.remove(topNValuesMap.firstKey());
+            topNValuesReducerMap.put(Long.valueOf(key.toString()), Integer.valueOf(key.toString()));
+            if (topNValuesReducerMap.size() > count) {
+                topNValuesReducerMap.remove(topNValuesReducerMap.firstKey());
             }
-            for (Integer i : topNValuesMap.descendingMap().values()) {
-                context.write(NullWritable.get(), new IntWritable(i));
+        }
+
+        @Override
+        public void cleanup(Context context) throws IOException, InterruptedException {
+            int rank = 1;
+            for (Long entry : topNValuesReducerMap.descendingKeySet()) {
+                context.write(new Text(String.valueOf(rank)), new Text(String.valueOf(entry)));
+                rank++;
             }
         }
     }
@@ -69,8 +94,9 @@ public class MaxValues {
         Job job = Job.getInstance(conf, "maxkvalues");
 
         job.setJarByClass(MaxValues.class);
+
         job.setOutputKeyClass(Text.class);
-        job.setOutputValueClass(IntWritable.class);
+        job.setOutputValueClass(Text.class);
 
         job.setMapperClass(Map.class);
         job.setReducerClass(Reduce.class);
