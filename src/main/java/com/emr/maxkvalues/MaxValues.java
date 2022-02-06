@@ -89,7 +89,7 @@ public class MaxValues {
     public static void main(String[] args) throws Exception {
 
         Configuration conf = new Configuration();
-        conf.set("count", "5");
+        conf.set("count", "10");
 
         Job job = Job.getInstance(conf, "maxkvalues");
 
